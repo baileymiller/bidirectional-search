@@ -1,9 +1,8 @@
-from tracemalloc import start
-from turtle import backward
-from unicodedata import bidirectional
+from matplotlib import pyplot as plt
 import numpy as np
 from heapq import heappush, heappop
 import random 
+import matplotlib.pyplot as plt
 
 REVERSE_ACTION = { 'l': 'r', 'r': 'l', 't': 'b', 'b': 't'}
 
@@ -182,13 +181,15 @@ def bidirectional_graph_search(start, goal, heuristic, priority, select_directio
   add_sucessors_to_frontier(PQNode(start.get_copy(), [], 0), visitedF, wf, frontierF, priority, heuristic, goal)
   add_sucessors_to_frontier(PQNode(goal.get_copy(), [], 0), visitedB, wt, frontierB, priority, heuristic, start)
 
+  num_expansions = 0
   while True:
-    direction = select_direction(visitedF, visitedB, frontierF, frontierB)
+    direction = select_direction(visitedF, visitedB, frontierF, frontierB, num_expansions)
     if direction == 'forward':
       intersect_node = expand_next_node(visitedF, wf, frontierF, visitedB, priority, heuristic, goal)
     else:
       intersect_node = expand_next_node(visitedB, wt, frontierB, visitedF, priority, heuristic, start)
 
+    num_expansions += 1
     if not intersect_node == None:
       forward_path = []
       curr_state = intersect_node.state 
@@ -218,14 +219,22 @@ def ucs_priority(g, h):
     return g
 
 #=========Forward/Backward Expansion Selection Strategy=============#
-def only_forward(_visitedF, _visitedB, _frontierF, _frontierB):
+def only_forward(_visitedF, _visitedB, _frontierF, _frontierB, _num_expansions):
   return 'forward'
 
-def only_backward(_visitedF, _visitedB, _frontierF, _frontierB):
+def only_backward(_visitedF, _visitedB, _frontierF, _frontierB, _num_expansions):
   return 'backward'
 
-def random_direction(_visitedF, _visitedB, _frontierF, _frontierB):
-  return 'forward' if random.random() < 0.5 else 'backward'
+def get_weighted_random_direction(freq):
+  def weighted_random_direction(_visitedF, _visitedB, _frontierF, _frontierB, _num_expansions):
+    return 'forward' if random.random() < freq else 'backward'
+  return weighted_random_direction
+
+def alternate_directions(_visitedF, _visitedB, _frontierF, _frontierB, num_expansions):
+  return 'forward' if num_expansions % 2 == 0 else 'backward'
+
+def magnitude_directions(_visitedF, _visitedB, frontierF, frontierB, _num_expansions):
+  return 'forward' if frontierF.size() < frontierB.size() else 'backward'
 
 #=========================== Solvers ================================#
 def ucs_unidirectional_forward(start, goal):
@@ -234,8 +243,14 @@ def ucs_unidirectional_forward(start, goal):
 def ucs_unidirectional_backward(start, goal):
   return bidirectional_graph_search(start, goal, h_trivial, ucs_priority, only_backward)
 
-def ucs_bidirectional(start, goal):
-  return bidirectional_graph_search(start, goal, h_trivial, ucs_priority, random_direction)
+def ucs_bidirectional_random(start, goal, dir_freq = 0.5):
+  return bidirectional_graph_search(start, goal, h_trivial, ucs_priority, get_weighted_random_direction(dir_freq))
+
+def ucs_bidirectional_determinstic(start, goal):
+  return bidirectional_graph_search(start, goal, h_trivial, ucs_priority, alternate_directions)
+
+def ucs_bidirectional_magnitude(start, goal):
+  return bidirectional_graph_search(start, goal, h_trivial, ucs_priority, magnitude_directions)
 
 #=========================== Test Helpers ================================#
 def apply_random_valid_action(state):
@@ -262,7 +277,7 @@ def test_random():
   goal_state = get_random_goal_state()
   start_state = get_random_state_from_goal(goal_state, 35)
   print(start_state, '\n', goal_state)
-  path, nodes_visited = ucs_bidirectional(start_state, goal_state)
+  path, nodes_visited = ucs_bidirectional_random(start_state, goal_state)
   print('path: ', path, '   nodes_visited: ', nodes_visited)
   print('Path is valid: ', validate_path(path, start_state, goal_state))
 
@@ -283,7 +298,7 @@ def test_fixed():
 
   f_path, f_nodes_visited = ucs_unidirectional_forward(start_state, goal_state)
   b_path, b_nodes_visited = ucs_unidirectional_backward(start_state, goal_state)
-  bi_path, bi_nodes_visited = ucs_bidirectional(start_state, goal_state)
+  bi_path, bi_nodes_visited = ucs_bidirectional_random(start_state, goal_state)
 
   assert(validate_path(f_path, start_state, goal_state))
   assert(validate_path(b_path, start_state, goal_state))
@@ -295,6 +310,61 @@ def test_fixed():
   print('Backward cost: ', b_nodes_visited)
   print('Bi costs', bi_nodes_visited)
 
+def test_weights(hardness = 5, n_samples = 10):
+  forward_freq = np.linspace(0, 1, 11)
+  forward_freq_cost = np.zeros_like(forward_freq)
+  for i in range(n_samples):
+    goal_state = get_random_goal_state()
+    start_state = get_random_state_from_goal(goal_state, hardness)
+    for j in range(len(forward_freq)):
+      _, cost = ucs_bidirectional_random(start_state, goal_state, forward_freq[j])
+      forward_freq_cost[j] += float(cost)
+    print('sample ', i, ' computed.')
+
+  forward_freq_cost /= float(n_samples)
+
+  plt.plot(forward_freq, forward_freq_cost)
+  plt.show()
+
+def test_deterministic(hardness = [3, 4, 5, 6, 7, 8] , n_samples = 10):
+  deterministic_cost = np.zeros((len(hardness)))
+  random_cost = np.zeros((len(hardness)))
+  for i in range(len(hardness)):
+    for _ in range(n_samples):
+      goal_state = get_random_goal_state()
+      start_state = get_random_state_from_goal(goal_state, hardness[i])
+      _, deterministic_cost_sample = ucs_bidirectional_determinstic(start_state, goal_state)
+      _, random_cost_sample = ucs_bidirectional_random(start_state, goal_state, 0.5)
+      deterministic_cost[i] += deterministic_cost_sample
+      random_cost[i] += random_cost_sample
+    print('hardness ', i, ' computed.')
+
+  deterministic_cost /= n_samples
+  random_cost /= n_samples
+
+  plt.plot(hardness, deterministic_cost, color='green')
+  plt.plot(hardness, random_cost, color='red')
+  plt.show()
+
+def test_alternate(hardness = [10, 15, 20] , n_samples = 10):
+  alternate_cost = np.zeros((len(hardness)))
+  magnitude_cost = np.zeros((len(hardness)))
+  for i in range(len(hardness)):
+    for _ in range(n_samples):
+      goal_state = get_random_goal_state()
+      start_state = get_random_state_from_goal(goal_state, hardness[i])
+      _, alternate_cost_sample = ucs_bidirectional_determinstic(start_state, goal_state)
+      _, magnitude_cost_sample = ucs_bidirectional_magnitude(start_state, goal_state)
+      alternate_cost[i] += alternate_cost_sample
+      magnitude_cost[i] += magnitude_cost_sample
+    print('hardness ', i, ' computed.')
+
+  alternate_cost /= n_samples
+  magnitude_cost /= n_samples
+
+  plt.plot(hardness, alternate_cost, color='green')
+  plt.plot(hardness, magnitude_cost, color='red')
+  plt.show()
 
 
-test_fixed()
+test_alternate()
